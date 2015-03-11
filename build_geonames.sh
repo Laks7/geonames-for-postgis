@@ -70,6 +70,12 @@ EOT
 psql -U $DBUSER -h $DBHOST -p $DBPORT -c \
     "CREATE DATABASE ${DBNAME} WITH TEMPLATE = template0 ENCODING = 'UTF8';" 
 
+# Create postgis extension
+psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
+  CREATE OR REPLACE LANGUAGE plpgsql;
+  CREATE EXTENSION postgis;
+EOT
+
 echo -e "\n+-----CREATE TABLES and SEQUENCES (step 2 of 8)----------+\n"
 
 psql -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
@@ -319,24 +325,12 @@ EOT
 
 echo -e "\n+----CREATING SPATIAL GEOMETRIES (step 6 of 8)----------+\n"
 
-# Add postgis spatial features to new database
-# Helps to verify topology feature location on disk
-psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
-  CREATE OR REPLACE LANGUAGE plpgsql;
-  CREATE EXTENSION postgis;
-EOT
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/postgis.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/postgis_comments.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/spatial_ref_sys.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/rtpostgis.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/raster_comments.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/topology.sql
-# psql -e -d ${DBNAME} -f ${POSTGISPATH}/topology_comments.sql
 
 psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
 SELECT AddGeometryColumn ('public','geoname','the_geom',4326,'POINT',2);
 UPDATE geoname SET the_geom = ST_PointFromText('POINT(' || longitude || ' ' || latitude || ')', 4326);
 --UPDATE geoname SET the_geom = ST_SetSRID(ST_Point(longitude,latitude),4326);
+ALTER TABLE geoname ALTER COLUMN the_geom SET not null;
 
 SELECT AddGeometryColumn ('public','postalcodes','the_geom',4326,'POINT',2);
 UPDATE postalcodes SET the_geom = ST_PointFromText('POINT(' || longitude || ' ' || latitude || ')', 4326);
@@ -347,94 +341,14 @@ echo -e "+----INDEX and CLUSTER GEOMETRIES (step 7 of 8)\n"
 
 psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
 CREATE INDEX idx_geoname ON geoname USING gist(the_geom);
-ALTER TABLE geoname ALTER COLUMN the_geom SET not null;
+EOT
+
+psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
 CLUSTER idx_geoname ON geoname;
 CREATE INDEX idx_postalcodes ON postalcodes USING gist(the_geom);
 ALTER TABLE postalcodes ALTER COLUMN the_geom SET not null;
 CLUSTER idx_postalcodes ON postalcodes;
 EOT
 
-# echo -e "\n\n+----CREATE ROLES and GRANT privileges to those who need READ or WRITE"
-# echo -e "+----permissions (step 8 of 8)----------+\n\n"
-
-# echo -e "++++ FIRST create read-only USERS +++\n"
-
-# psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
-# ALTER SCHEMA public RENAME TO ${DBNAME};
-# CREATE USER ${GEOUSER} WITH login nocreaterole nocreateuser nocreatedb UNENCRYPTED PASSWORD '${GEOPASSWORD}';
-# GRANT SELECT ON ALL TABLES IN SCHEMA ${DBNAME} TO ${GEOUSER};
-# CREATE ROLE ${GEOROLE} INHERIT;
-# GRANT SELECT ON ${DBNAME}.geometry_columns TO ${GEOROLE};
-# GRANT SELECT ON ${DBNAME}.geography_columns TO ${GEOROLE};
-# GRANT SELECT ON ${DBNAME}.spatial_ref_sys TO ${GEOROLE};
-# GRANT ${GEOROLE} TO ${GEOUSER};
-# EOT
-
-# echo -e "\n\n+----SECOND create user with WRITE privilges (INSERT, UPDATE, DELETE).\n"
-
-# psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
-# CREATE USER ${DEVUSER} WITH login nocreatedb nocreaterole nocreateuser UNENCRYPTED PASSWORD '${DEVPASSWORD}';
-# GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${DBNAME} TO ${DEVUSER};
-# CREATE ROLE ${DEVROLE} INHERIT;
-# GRANT ${DEVROLE} TO ${DEVUSER};
-# GRANT SELECT,INSERT,UPDATE,DELETE ON ${DBNAME}.geometry_columns TO ${DEVROLE};
-# GRANT SELECT,INSERT,UPDATE,DELETE ON ${DBNAME}.geography_columns TO ${DEVROLE};
-# GRANT SELECT,INSERT,UPDATE,DELETE ON ${DBNAME}.spatial_ref_sys TO ${DEVROLE};
-# EOT
-
-# echo -e "\n\n+----FINISH by changing ownership of all tables, sequences and views"
-# echo -e "+----to the database developer role -i.e. ${DEVROLE}.\n"
-
-# NOTE:[EXPERIMENTAL] Not sure this is necessary or even a good 
-# idea, -i.e., change owner of all tables, sequences, views 
-# schemas (i.e., public and topology) and the database itself to 
-# developer user.  The alternative is to keep postgres the 
-# owner and just grant all proper read-write permissions with 
-# roles. Leave all functions and triggers owned by SUPERUSER 
-# (i.e. postgres).
-# psql -e -U $DBUSER -h $DBHOST -p $DBPORT ${DBNAME} <<EOT
-# ALTER TABLE ${DBNAME}.alternatename OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.countryinfo OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.continentcodes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.languagecodes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.admin1codes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.geoname OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.spatial_ref_sys OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.postalcodes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.admin2codes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.featurecodes OWNER TO ${DEVUSER};
-# ALTER TABLE ${DBNAME}.timezones OWNER TO ${DEVUSER};
-# ALTER VIEW ${DBNAME}.geography_columns OWNER TO ${DEVUSER};
-# ALTER VIEW ${DBNAME}.geometry_columns OWNER TO ${DEVUSER};
-# ALTER VIEW ${DBNAME}.raster_columns OWNER TO ${DEVUSER};
-# ALTER VIEW ${DBNAME}.raster_overviews OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.alternatename_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.countryinfo_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.continentcodes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.languagecodes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.admin1codes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.geoname_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.postalcodes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.admin2codes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.featurecodes_id_seq OWNER TO ${DEVUSER};
-# ALTER SEQUENCE ${DBNAME}.timezones_id_seq OWNER TO ${DEVUSER};
-# --ALTER TABLE topology.layer OWNER TO ${DEVUSER};
-# --ALTER TABLE topology.topology OWNER TO ${DEVUSER};
-# ALTER SEQUENCE topology.topology_id_seq OWNER TO ${DEVUSER};
-# ALTER SCHEMA ${DBNAME} OWNER TO ${DEVUSER};
-# ALTER SCHEMA topology OWNER TO ${DEVUSER};
-# ALTER DATABASE geonames OWNER TO ${DEVUSER};
-# ALTER USER ${DEVUSER} SET search_path = '$user','geonames';
-# ALTER USER ${GEOUSER} SET search_path = '$user','geonames';
-# GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${DBNAME} TO ${DEVROLE};
-# GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${DBNAME} TO ${GEOROLE};
-# -- GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA topology TO ${DEVROLE};
-# -- GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA topology TO ${GEOROLE};
-# EOT
-
-sleep 1
-# echo -e "\n\nIMPORTANT: Make sure to configure pg_hba.conf (and pb_ident.conf if using "
-# echo -e "user maps) to give ${GEOUSER} the access permissions it requires and reload "
-# echo -e "configuration - i.e., (\$ sudo /etc/init.d/postgresql reload).\n"
 echo -e "\n+----PROCESS COMPLETE.-----------------------+\n"
 exit 0
